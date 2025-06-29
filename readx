@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+
+# CONFIGURATION
+MAX_HISTORY_LINES=100
+
+# INPUT PARAMETERS
+START_DIR="$1"
+PROMPT="$2"
+OUTPUT_FILE="$3"
+
+HISTFILE="$HOME/.readx2-history"
+CURRENT_DIR="$START_DIR"
+LINE=""
+CURSOR=0
+
+# Terminal raw mode
+stty -echo -icanon time 0 min 1
+
+cleanup() {
+  stty sane
+  echo
+}
+trap cleanup EXIT
+
+# Function to find longest common prefix
+longest_common_prefix() {
+  local prefix="$1"
+  shift
+  for word in "$@"; do
+    while [[ "${word:0:${#prefix}}" != "$prefix" && -n "$prefix" ]]; do
+      prefix="${prefix:0:$((${#prefix}-1))}"
+    done
+  done
+  echo "$prefix"
+}
+
+# Dummy remote exec shim (can be replaced with ssh command)
+ssh_exec() {
+  local cmd="$1"
+  eval "$cmd"
+}
+
+# Load history
+REAL_HISTORY=()
+[[ -f "$HISTFILE" ]] && mapfile -t REAL_HISTORY < "$HISTFILE"
+HISTORY=("${REAL_HISTORY[@]}")
+HISTORY_INDEX=${#HISTORY[@]}
+
+print_prompt() {
+  printf "\r\033[K%s> %s" "$PROMPT" "$LINE"
+}
+
+output_and_exit() {
+  local code=$1
+  [[ -n "$OUTPUT_FILE" ]] && echo "$LINE" > "$OUTPUT_FILE" || echo "$LINE"
+  exit "$code"
+}
+
+print_prompt
+
+while IFS= read -rsn1 char; do
+  case "$char" in
+    $'\e')
+      read -rsn2 rest
+      case "$rest" in
+        '[A')  # Up arrow
+          if (( HISTORY_INDEX > 0 )); then
+            ((HISTORY_INDEX--))
+            LINE="${HISTORY[HISTORY_INDEX]}"
+            CURSOR=${#LINE}
+          fi
+          ;;
+        '[B')  # Down arrow
+          if (( HISTORY_INDEX < ${#HISTORY[@]} - 1 )); then
+            ((HISTORY_INDEX++))
+            LINE="${HISTORY[HISTORY_INDEX]}"
+            CURSOR=${#LINE}
+          else
+            LINE=""
+            CURSOR=0
+          fi
+          ;;
+      esac
+      print_prompt
+      ;;
+    '')  # ENTER
+      echo
+      LAST_HIST=""
+      [[ -f "$HISTFILE" ]] && LAST_HIST=$(tail -n 1 "$HISTFILE")
+      if [[ "$LINE" != "$LAST_HIST" ]]; then
+        echo "$LINE" >> "$HISTFILE"
+        tail -n "$MAX_HISTORY_LINES" "$HISTFILE" > "${HISTFILE}.tmp" && mv "${HISTFILE}.tmp" "$HISTFILE"
+      fi
+      output_and_exit 0
+      ;;
+    $'\t')  # TAB
+      read -ra TOKENS <<< "$LINE"
+      fragment="${TOKENS[-1]}"
+      before="${LINE%$fragment}"
+      mapfile -t matches < <(ssh_exec "cd '$CURRENT_DIR' && compgen -f -- '$fragment'")
+      for i in "${!matches[@]}"; do
+        if ssh_exec "[ -d '$CURRENT_DIR/${matches[$i]}' ]"; then
+          [[ "${matches[$i]}" != */ ]] && matches[$i]="${matches[$i]}/"
+        fi
+      done
+
+      if (( ${#matches[@]} == 1 )); then
+        match="${matches[0]}"
+        LINE="$before$match"
+        CURSOR=${#LINE}
+        print_prompt
+        continue
+      elif (( ${#matches[@]} > 1 )); then
+        COMMON=$(longest_common_prefix "${matches[@]}")
+        if [[ "$COMMON" != "$fragment" ]]; then
+          LINE="$before$COMMON"
+          CURSOR=${#LINE}
+          if [[ "$COMMON" == */ ]]; then
+            CURRENT_DIR="$CURRENT_DIR/${COMMON%/}"
+          fi
+        else
+          echo
+          printf "%s\n" "${matches[@]}" | paste -sd ' ' - | fold -s -w $(tput cols)
+        fi
+        print_prompt
+      fi
+      ;;
+    $'\177')  # BACKSPACE
+      if (( CURSOR > 0 )); then
+        removed_char="${LINE:$((CURSOR - 1)):1}"
+        LINE="${LINE:0:$((CURSOR - 1))}${LINE:$CURSOR}"
+        ((CURSOR--))
+      fi
+      print_prompt
+      ;;
+    *)
+      LINE="${LINE:0:$CURSOR}$char${LINE:$CURSOR}"
+      ((CURSOR++))
+      print_prompt
+      ;;
+  esac
+
+done
