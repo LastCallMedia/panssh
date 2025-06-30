@@ -17,7 +17,6 @@ CURSOR=0
 stty -echo -icanon time 0 min 1
 
 cleanup() {
-  save_history
   stty sane
   echo
 }
@@ -48,15 +47,15 @@ load_history() {
   HISTORY_INDEX=${#HISTORY[@]}
 }
 
-add_history_line() {
-  if (( ${#HISTORY[@]} == 0 )) || [[ "$LINE" != "${HISTORY[-1]}" ]]; then
-    HISTORY+=("$LINE")
-  fi
-}
-
 save_history() {
   if (( ${#HISTORY[@]} > 0 )); then
     printf "%s\n" "${HISTORY[@]}" | tail -n "$MAX_HISTORY_LINES" > "$HISTFILE"
+  fi
+}
+
+add_history_line() {
+  if (( ${#HISTORY[@]} == 0 )) || [[ "$LINE" != "${HISTORY[-1]}" ]]; then
+    HISTORY+=("$LINE")
   fi
 }
 
@@ -95,7 +94,7 @@ while IFS= read -rsn1 char; do
       ;;
     # ENTER key.
     '')
-      add_history_line
+      [[ -z "$LINE" ]] || add_history_line
       [[ -n "$OUTPUT_FILE" ]] && echo "$LINE" > "$OUTPUT_FILE" || echo "$LINE"
       break
       ;;
@@ -148,3 +147,6 @@ while IFS= read -rsn1 char; do
       ;;
   esac
 done
+
+save_history
+exit 0
