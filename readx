@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# Test example:
+# ./readx $(pwd) "panssh" /tmp/readx; cat /tmp/readx
+
 # CONFIGURATION
 MAX_HISTORY_LINES=100
 
