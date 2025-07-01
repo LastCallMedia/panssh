@@ -1,109 +1,6 @@
 #!/usr/bin/env bash
 # readx — drop-in replacement for `read -e`, with custom tab-complete logic.
 
-_readx_escape_for_bash() {
-  local input="$1"
-  # If special characters present, escape them
-  printf "%q" "$input"
-}
-
-_readx_tab_handler() {
-  local line="$READLINE_LINE"
-  local point=$READLINE_POINT
-  local before=${line:0:point}
-  local after=${line:point}
-
-  local current_word="${before##*[[:space:]]}"
-  local word_start=$((point - ${#current_word}))
-  local prefix="${before:0:word_start}"
-
-  local num_words
-  num_words=$(awk '{ print NF }' <<< "$before")
-
-  local completions=()
-  if (( num_words <= 1 )); then
-    completions=( $(compgen -A command -- "$current_word") )
-  else
-    completions=( $(compgen -f -- "$current_word") )
-  fi
-
-  (( ${#completions[@]} == 0 )) && return
-
-  # Remove duplicates.
-  completions=( $(printf "%s\n" "${completions[@]}" | awk '!seen[$0]++') )
-
-  if (( ${#completions[@]} == 1 )); then
-    local match="${completions[0]}"
-    local quote=""
-    local inserted=""
-
-    # Detect quote context (start of current_word)
-    if [[ "$current_word" == \"* ]]; then
-      quote="\""
-      current_word="${current_word#\"}"
-    elif [[ "$current_word" == \'* ]]; then
-      quote="'"
-      current_word="${current_word#\'}"
-    fi
-
-    # Escape the match
-    inserted="$(_readx_escape_for_bash "$match")"
-
-    if [[ -n "$quote" ]]; then
-      if [[ -d "$match" ]]; then
-        inserted="${quote}${inserted}/"
-      else
-        inserted="${quote}${inserted}${quote} "
-      fi
-    else
-      if [[ -d "$match" ]]; then
-        inserted="${inserted}/"
-      else
-        inserted+=" "
-      fi
-    fi
-
-    # Replace the current word with the insertion
-    local new_line="${prefix}${inserted}${after}"
-    READLINE_LINE="$new_line"
-    READLINE_POINT=$(( ${#prefix} + ${#inserted} ))
-    return
-  fi
-
-  # Longest common prefix
-  local lcp="${completions[0]}"
-  for match in "${completions[@]:1}"; do
-    local i=0
-    while [[ "${lcp:i:1}" == "${match:i:1}" && $i -lt ${#lcp} ]]; do
-      ((i++))
-    done
-    lcp="${lcp:0:i}"
-  done
-
-  if [[ "$lcp" != "$current_word" ]]; then
-    local inserted="${lcp#$current_word}"
-    READLINE_LINE="${before}${inserted}${after}"
-    READLINE_POINT=$((point + ${#inserted}))
-  fi
-
-  echo -ne "\a" >&2
-
-  # Display matches below the prompt
-  {
-    echo
-    printf "%s\n" "${completions[@]}" | paste -sd ' ' - | fold -s -w "$(tput cols)"
-  } >&2
-}
-
-
-_readx_return() {
-  local status=$1
-  bind '"\t": complete' 2>/dev/null
-  trap - EXIT INT TERM
-  echo "_readx_return: status: $status"
-  return $status
-}
-
 readx() {
   local prompt var
 
@@ -128,4 +25,102 @@ readx() {
   fi
 
   printf -v "$var" '%s' "$__readx_input"
+}
+
+_readx_tab_handler() {
+  local line="$READLINE_LINE"
+  local point=$READLINE_POINT
+  local before=${line:0:point}
+  local after=${line:point}
+
+  local current_word="${before##*[[:space:]]}"
+  local word_start=$((point - ${#current_word}))
+  local prefix="${before:0:word_start}"
+
+  # Get current word and check if input has a space
+  local current_word="${before##*[[:space:]]}"
+
+  if [[ "$before" == *" "* ]]; then
+    completions=( $(compgen -f -- "$current_word") )
+  else
+    completions=( $(compgen -A command -- "$current_word") )
+  fi
+
+  # Early return if no matches found.
+  (( ${#completions[@]} == 0 )) && return
+
+  # Deduplicate matches (Bash 3.2 compatible)
+  completions=( $(printf "%s\n" "${completions[@]}" | awk '!seen[$0]++') )
+
+  # Handle single match (exact completion)
+  if (( ${#completions[@]} == 1 )); then
+    local match="${completions[0]}"
+    local quote=""
+
+    if [[ "$current_word" == \"* ]]; then
+      quote="\""
+      current_word="${current_word#\"}"
+    elif [[ "$current_word" == \'* ]]; then
+      quote="'"
+      current_word="${current_word#\'}"
+    fi
+
+    if [[ -n "$quote" ]]; then
+      if [[ -d "$match" ]]; then
+        match="${quote}${match}/"
+      else
+        match="${quote}${match}${quote} "
+      fi
+    else
+      if [[ -d "$match" ]]; then
+        match="${match}/"
+      else
+        match+=" "
+      fi
+    fi
+
+    READLINE_LINE="${prefix}${match}${after}"
+    READLINE_POINT=$(( ${#prefix} + ${#match} ))
+    return
+  fi
+
+  # Multiple matches: find longest common prefix (LCP)
+  local lcp="${completions[0]}"
+  for match in "${completions[@]:1}"; do
+    local i=0
+    while [[ "${lcp:i:1}" == "${match:i:1}" && $i -lt ${#lcp} ]]; do
+      ((i++))
+    done
+    lcp="${lcp:0:i}"
+  done
+
+  # Insert LCP delta if longer than what was typed
+  if [[ "$lcp" != "$current_word" ]]; then
+    local inserted="${lcp#$current_word}"
+    READLINE_LINE="${before}${inserted}${after}"
+    READLINE_POINT=$((point + ${#inserted}))
+  fi
+
+  echo -ne "\a" >&2  # Ring bell for multiple matches
+
+  # Show up to 20 matches, then summarize the rest
+  local max_show=20
+  local total=${#completions[@]}
+  local display=("${completions[@]:0:$max_show}")
+
+  {
+    echo
+    printf "%s\n" "${display[@]}" | paste -sd ' ' - | fold -s -w "$(tput cols)"
+    if (( total > max_show )); then
+      echo "(and $((total - max_show)) more)"
+    fi
+  } >&2
+}
+
+_readx_return() {
+  local status=$1
+  bind '"\t": complete' 2>/dev/null
+  trap - EXIT INT TERM
+  echo "_readx_return: status: $status"
+  return $status
 }
