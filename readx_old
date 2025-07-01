@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+
+# Test example:
+# ./readx $(pwd) "panssh" /tmp/readx; cat /tmp/readx
+
+# CONFIGURATION
+MAX_HISTORY_LINES=100
+
+# INPUT PARAMETERS
+START_DIR="$1"
+PROMPT="$2"
+OUTPUT_FILE="$3"
+
+HISTFILE="$HOME/.readx2-history"
+CURRENT_DIR="$START_DIR"
+LINE=""
+CURSOR=0
+
+# Terminal raw mode
+stty -echo -icanon time 0 min 1
+
+cleanup() {
+  stty sane
+  echo
+}
+trap cleanup EXIT
+
+# Function to find longest common prefix
+longest_common_prefix() {
+  local prefix="$1"
+  shift
+  for word in "$@"; do
+    while [[ "${word:0:${#prefix}}" != "$prefix" && -n "$prefix" ]]; do
+      prefix="${prefix:0:$((${#prefix}-1))}"
+    done
+  done
+  echo "$prefix"
+}
+
+# Dummy remote exec shim (can be replaced with ssh command)
+ssh_exec() {
+  local cmd="$1"
+  eval "$cmd"
+}
+
+load_history() {
+  REAL_HISTORY=()
+  [[ -f "$HISTFILE" ]] && mapfile -t REAL_HISTORY < "$HISTFILE"
+  HISTORY=("${REAL_HISTORY[@]}")
+  HISTORY_INDEX=${#HISTORY[@]}
+}
+
+save_history() {
+  if (( ${#HISTORY[@]} > 0 )); then
+    printf "%s\n" "${HISTORY[@]}" | tail -n "$MAX_HISTORY_LINES" > "$HISTFILE"
+  fi
+}
+
+add_history_line() {
+  if (( ${#HISTORY[@]} == 0 )) || [[ "$LINE" != "${HISTORY[-1]}" ]]; then
+    HISTORY+=("$LINE")
+  fi
+}
+
+get_history_line() {
+  local direction=$1
+  (( HISTORY_INDEX += direction ))
+  if (( HISTORY_INDEX < 0 )); then
+    HISTORY_INDEX=0
+  elif (( HISTORY_INDEX >= ${#HISTORY[@]} )); then
+    HISTORY_INDEX=${#HISTORY[@]}
+    LINE=""
+    CURSOR=0
+    return
+  fi
+  LINE="${HISTORY[HISTORY_INDEX]}"
+  CURSOR=${#LINE}
+}
+
+print_prompt() {
+  # Clear line and print input
+  printf "\r\033[K%s> %s" "$PROMPT:$START_DIR" "$LINE"
+
+  # Move terminal cursor to the correct character
+  local total_prompt="${PROMPT}:${START_DIR}> "
+  local offset=$(( ${#total_prompt} + CURSOR ))
+  printf "\r\033[%dC" "$offset"
+}
+
+load_history
+print_prompt
+
+while IFS= read -rsn1 char; do
+  case "$char" in
+    # Escape sequence: up/down arrow keys
+    $'\e')
+      read -rsn1 -t 0.01 next
+      if [[ "$next" == "[" ]]; then
+        read -rsn1 -t 0.01 rest
+        case "$rest" in
+          'A') get_history_line -1 ;;  # Up
+          'B') get_history_line  1 ;;  # Down
+          'C') (( CURSOR < ${#LINE} )) && ((CURSOR++)) ;;  # Right
+          'D') (( CURSOR > 0 )) && ((CURSOR--)) ;;         # Left
+          '3')  # DEL key: ESC [ 3 ~
+            read -rsn1 -t 0.01 tilde
+            if [[ "$tilde" == "~" && $CURSOR -lt ${#LINE} ]]; then
+              LINE="${LINE:0:$CURSOR}${LINE:$((CURSOR+1))}"
+            fi
+            ;;
+          'H') CURSOR=0 ;;        # Home (ESC [ H)
+          'F') CURSOR=${#LINE} ;; # End (ESC [ F)
+        esac
+      elif [[ "$next" == "O" ]]; then
+        read -rsn1 -t 0.01 rest
+        case "$rest" in
+          'H') CURSOR=0 ;;        # Home (ESC O H)
+          'F') CURSOR=${#LINE} ;; # End (ESC O F)
+        esac
+      fi
+      print_prompt
+      ;;
+    # ENTER key.
+    '')
+      [[ -z "$LINE" ]] || add_history_line
+      [[ -n "$OUTPUT_FILE" ]] && echo "$LINE" > "$OUTPUT_FILE" || echo "$LINE"
+      break
+      ;;
+    # TAB key.
+    $'\t')
+      read -ra TOKENS <<< "$LINE"
+      fragment="${TOKENS[-1]}"
+      before="${LINE%$fragment}"
+      mapfile -t matches < <(ssh_exec "cd '$CURRENT_DIR' && compgen -f -- '$fragment'")
+      for i in "${!matches[@]}"; do
+        if ssh_exec "[ -d '$CURRENT_DIR/${matches[$i]}' ]"; then
+          [[ "${matches[$i]}" != */ ]] && matches[$i]="${matches[$i]}/"
+        fi
+      done
+
+      if (( ${#matches[@]} == 1 )); then
+        match="${matches[0]}"
+        LINE="$before$match"
+        CURSOR=${#LINE}
+        print_prompt
+        continue
+      elif (( ${#matches[@]} > 1 )); then
+        COMMON=$(longest_common_prefix "${matches[@]}")
+        if [[ "$COMMON" != "$fragment" ]]; then
+          LINE="$before$COMMON"
+          CURSOR=${#LINE}
+          if [[ "$COMMON" == */ ]]; then
+            CURRENT_DIR="$CURRENT_DIR/${COMMON%/}"
+          fi
+        else
+          echo
+          printf "%s\n" "${matches[@]}" | paste -sd ' ' - | fold -s -w $(tput cols)
+        fi
+        print_prompt
+      fi
+      ;;
+    # BACKSPACE key.
+    $'\177')
+      if (( CURSOR > 0 )); then
+        LINE="${LINE:0:$((CURSOR - 1))}${LINE:$CURSOR}"
+        ((CURSOR--))
+      fi
+      print_prompt
+      ;;
+    # Any other key.
+    *)
+      LINE="${LINE:0:$CURSOR}$char${LINE:$CURSOR}"
+      ((CURSOR++))
+      print_prompt
+      ;;
+  esac
+done
+
+save_history
+[[ -n "$LINE" ]] && exit 0 || exit 1
