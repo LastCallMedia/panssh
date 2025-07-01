@@ -255,7 +255,7 @@ bind '"\t":' 2>/dev/null
 # --- Main loop ---
 while true; do
     interrupted=0
-    read -e -p "$SITE_NAME.$ENV_ID:$current_dir> " cmd
+    read -e -r -p "$SITE_NAME.$ENV_ID:$current_dir> " cmd
 
     [[ "$interrupted" -eq 1 ]] && continue
     [[ -z "$cmd" ]] && continue
