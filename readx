@@ -25,6 +25,7 @@ readx() {
   fi
 
   printf -v "$var" '%s' "$__readx_input"
+  _readx_return 0
 }
 
 _readx_tab_handler() {
@@ -121,6 +122,5 @@ _readx_return() {
   local status=$1
   bind '"\t": complete' 2>/dev/null
   trap - EXIT INT TERM
-  echo "_readx_return: status: $status"
   return $status
 }
