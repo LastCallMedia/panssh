@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # readx — drop-in replacement for `read -e`, with custom tab-complete logic.
 
+_readx_escape_for_bash() {
+  local input="$1"
+  # If special characters present, escape them
+  printf "%q" "$input"
+}
+
 _readx_tab_handler() {
   local line="$READLINE_LINE"
   local point=$READLINE_POINT
@@ -20,7 +26,6 @@ _readx_tab_handler() {
   else
     completions=( $(compgen -f -- "$current_word") )
   fi
-  echo "-----> compgen exit $?"
 
   (( ${#completions[@]} == 0 )) && return
 
@@ -29,18 +34,39 @@ _readx_tab_handler() {
 
   if (( ${#completions[@]} == 1 )); then
     local match="${completions[0]}"
-    local inserted="${match#$current_word}"
+    local quote=""
+    local inserted=""
 
-    if (( num_words <= 1 )); then
-      # Completing a command — insert a space
-      inserted+=" "
-    elif [[ -d "$match" ]]; then
-      # Completing a directory — insert a trailing slash
-      inserted+="/"
+    # Detect quote context (start of current_word)
+    if [[ "$current_word" == \"* ]]; then
+      quote="\""
+      current_word="${current_word#\"}"
+    elif [[ "$current_word" == \'* ]]; then
+      quote="'"
+      current_word="${current_word#\'}"
     fi
 
-    READLINE_LINE="${before}${inserted}${after}"
-    READLINE_POINT=$((point + ${#inserted}))
+    # Escape the match
+    inserted="$(_readx_escape_for_bash "$match")"
+
+    if [[ -n "$quote" ]]; then
+      if [[ -d "$match" ]]; then
+        inserted="${quote}${inserted}/"
+      else
+        inserted="${quote}${inserted}${quote} "
+      fi
+    else
+      if [[ -d "$match" ]]; then
+        inserted="${inserted}/"
+      else
+        inserted+=" "
+      fi
+    fi
+
+    # Replace the current word with the insertion
+    local new_line="${prefix}${inserted}${after}"
+    READLINE_LINE="$new_line"
+    READLINE_POINT=$(( ${#prefix} + ${#inserted} ))
     return
   fi
 
