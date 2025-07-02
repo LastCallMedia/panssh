@@ -36,6 +36,9 @@ readonly SSH_GENERAL_OPTIONS=" \
 readonly SSH_OPTIONS="-p $SSH_PORT $SSH_GENERAL_OPTIONS"
 readonly SCP_OPTIONS="-q -P $SSH_PORT $SSH_GENERAL_OPTIONS"
 
+# Location of this script.
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # --- Load SITE_IDs from config ---
 if [[ ! -f "$SITES_FILE" ]]; then
     echo "🟡 Sites file not found at: $SITES_FILE"
@@ -250,14 +253,30 @@ fi
 
 interrupted=0
 trap 'interrupted=1' SIGINT
-bind '"\t":' 2>/dev/null
+
+# Find and include our readx tool.
+if source "$SCRIPT_DIR/readx.source.sh" \
+|| source "$SCRIPT_DIR/../lib/panssh/readx.source.sh"; then
+    readonly READX="readx"
+else
+    echo "🚫 Failed to find readx.source.sh. Tab-completion will not be available."
+    readonly READX="read -e -r"
+fi
+
+# Get local colour settings.
+CLR0=$(tput sgr0 2>/dev/null) \
+&& CLR1=$(tput setaf 1 2>/dev/null) \
+&& CLR2=$(tput setaf 3 2>/dev/null) \
+&& CLR3=$(tput setaf 4 2>/dev/null)
 
 # --- Main loop ---
 while true; do
     interrupted=0
-    read -e -r -p "$SITE_NAME.$ENV_ID:$current_dir> " cmd
+    prompt=$(printf "${CLR1}%s${CLR0}.${CLR2}%s${CLR0}:${CLR3}%s${CLR0}%s" \
+        "$SITE_NAME" "$ENV_ID" "$current_dir")
 
-    [[ "$interrupted" -eq 1 ]] && continue
+    $READX -p "$prompt\$ " cmd
+    (( $interrupted ==1 )) && continue
     [[ -z "$cmd" ]] && continue
 
     history -s "$cmd"

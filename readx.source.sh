@@ -1,5 +1,11 @@
-#!/usr/bin/env bash
-# readx — drop-in replacement for `read -e`, with custom tab-complete logic.
+# readx — drop-in replacement for `read -e -r`, with custom tab-complete logic.
+# Use as: source <path-to>/readx.source.sh
+
+# Warn and exit if executed directly.
+[[ "${BASH_SOURCE[0]}" != "${0}" ]] || {
+  echo "This script should be sourced, not executed." >&2
+  exit 1
+}
 
 readx() {
   local prompt var
@@ -15,17 +21,20 @@ readx() {
     return 2
   fi
 
-  trap '_readx_return 130' EXIT INT TERM
-  bind -x '"\t":_readx_tab_handler' 2>/dev/null
+  local __readx_input status
 
-  local __readx_input
-  if ! read -e -r -p "${prompt}" __readx_input; then
-    echo -e "\nAborted."
-    _readx_return 130
-  fi
+  bind -x '"\t":_readx_tab_handler' 2>/dev/null
+  read -e -r -p "${prompt}" __readx_input
+  status=$?
+  bind '"\t": complete' 2>/dev/null
 
   printf -v "$var" '%s' "$__readx_input"
-  _readx_return 0
+  return $status
+}
+
+_readx_compgen() {
+  #ssh_exec "cd \"$current_dir\" && compgen $@"
+  compgen $@
 }
 
 _readx_tab_handler() {
@@ -42,15 +51,18 @@ _readx_tab_handler() {
   local current_word="${before##*[[:space:]]}"
 
   if [[ "$before" == *" "* ]]; then
-    completions=( $(compgen -f -- "$current_word") )
+    completions=( $(_readx_compgen -f -- "$current_word") )
   else
-    completions=( $(compgen -A command -- "$current_word") )
+    completions=( $(_readx_compgen -A command -- "$current_word") )
   fi
 
-  # Early return if no matches found.
-  (( ${#completions[@]} == 0 )) && return
+  # No input or no matches: sound bell and return.
+  if [[ -z "$line" ]] || (( ${#completions[@]} == 0 )); then
+    echo -ne "\a" >&2
+    return
+  fi
 
-  # Deduplicate matches (Bash 3.2 compatible)
+  # Remove duplicates.
   completions=( $(printf "%s\n" "${completions[@]}" | awk '!seen[$0]++') )
 
   # Handle single match (exact completion)
@@ -102,7 +114,7 @@ _readx_tab_handler() {
     READLINE_POINT=$((point + ${#inserted}))
   fi
 
-  echo -ne "\a" >&2  # Ring bell for multiple matches
+  echo -ne "\a" >&2  # Bell.
 
   # Show up to 20 matches, then summarize the rest
   local max_show=20
@@ -110,17 +122,11 @@ _readx_tab_handler() {
   local display=("${completions[@]:0:$max_show}")
 
   {
-    echo
-    printf "%s\n" "${display[@]}" | paste -sd ' ' - | fold -s -w "$(tput cols)"
-    if (( total > max_show )); then
-      echo "(and $((total - max_show)) more)"
+   
+    if (( total <= max_show )); then
+      printf "%s\n" "${display[@]}" | paste -sd ' ' - | fold -s -w "$(tput cols)"
+    else
+      echo "($total matches for $current_word)"
     fi
   } >&2
-}
-
-_readx_return() {
-  local status=$1
-  bind '"\t": complete' 2>/dev/null
-  trap - EXIT INT TERM
-  return $status
 }
