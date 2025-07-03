@@ -6,8 +6,6 @@
 # Emulates an interactive ssh connection to a Pantheon site's application
 # environment.
 #
-# Version: 1.0.0
-# 
 # Author: Andy Inman - andy@lastcallmedia.com
 # Copyright (c) 2025 Last Call Media
 # License: MIT
@@ -259,7 +257,7 @@ if source "$SCRIPT_DIR/readx.source.sh" \
 || source "$SCRIPT_DIR/../lib/panssh/readx.source.sh"; then
     readonly READX="readx"
 else
-    echo "🚫 Failed to find readx.source.sh. Tab-completion will not be available."
+    echo "🚫 Failed to include readx.source.sh. Tab-completion will not be available."
     readonly READX="read -e -r"
 fi
 
@@ -267,7 +265,7 @@ fi
 CLR0=$(tput sgr0 2>/dev/null) \
 && CLR1=$(tput setaf 1 2>/dev/null) \
 && CLR2=$(tput setaf 3 2>/dev/null) \
-&& CLR3=$(tput setaf 4 2>/dev/null)
+&& CLR3=$(tput setaf 6 2>/dev/null)
 
 # --- Main loop ---
 while true; do

@@ -8,10 +8,10 @@
 }
 
 readx() {
-  local prompt var
+  local var
 
   if [[ "$1" == "-p" ]]; then
-    prompt=$2
+    _READX_PROMPT=$2
     shift 2
   fi
 
@@ -24,17 +24,12 @@ readx() {
   local __readx_input status
 
   bind -x '"\t":_readx_tab_handler' 2>/dev/null
-  read -e -r -p "${prompt}" __readx_input
+  read -e -r -p "${_READX_PROMPT}" __readx_input
   status=$?
   bind '"\t": complete' 2>/dev/null
 
   printf -v "$var" '%s' "$__readx_input"
   return $status
-}
-
-_readx_compgen() {
-  #ssh_exec "cd \"$current_dir\" && compgen $@"
-  compgen $@
 }
 
 _readx_tab_handler() {
@@ -50,10 +45,11 @@ _readx_tab_handler() {
   # Get current word and check if input has a space
   local current_word="${before##*[[:space:]]}"
 
+  local completions
   if [[ "$before" == *" "* ]]; then
-    completions=( $(_readx_compgen -f -- "$current_word") )
+    completions=$(_readx_exec "compgen -f $current_word")
   else
-    completions=( $(_readx_compgen -A command -- "$current_word") )
+    completions=$(_readx_exec "compgen -c $current_word")
   fi
 
   # No input or no matches: sound bell and return.
@@ -79,13 +75,13 @@ _readx_tab_handler() {
     fi
 
     if [[ -n "$quote" ]]; then
-      if [[ -d "$match" ]]; then
+      if _readx_exec "[ -d \"$match\" ]"; then 
         match="${quote}${match}/"
       else
         match="${quote}${match}${quote} "
       fi
     else
-      if [[ -d "$match" ]]; then
+      if _readx_exec "[ -d \"$match\" ]"; then 
         match="${match}/"
       else
         match+=" "
@@ -116,17 +112,22 @@ _readx_tab_handler() {
 
   echo -ne "\a" >&2  # Bell.
 
-  # Show up to 20 matches, then summarize the rest
-  local max_show=20
+  # Display a limited number of matches.
+  local max_show=25
   local total=${#completions[@]}
   local display=("${completions[@]:0:$max_show}")
 
   {
-   
+    echo "$_READX_PROMPT$line";
+
     if (( total <= max_show )); then
-      printf "%s\n" "${display[@]}" | paste -sd ' ' - | fold -s -w "$(tput cols)"
+      printf "%s\n" "${display[@]}" | LC_ALL=C sort | column
     else
-      echo "($total matches for $current_word)"
+      echo "($total matches)"
     fi
   } >&2
+}
+
+_readx_exec() {
+  ssh_exec "export $REMOTE_ENV; cd \"$current_dir\" && $1"
 }
