@@ -1,11 +1,24 @@
-# 🖥️ panssh – Pantheon Interactive SSH Session Emulator
+# 🖥️ PanSSH
+## An emulated SSH login for Pantheon sites
 
-`panssh` emulates an interactive SSH connection to a Pantheon site's application environment using only their available (limited) SSH service. It provides command history, local editing of remote files and an emulated current working directory.
+PanSSH emulates an interactive SSH connection to a Pantheon site's application environment using only their available (limited) SSH service. It provides command history, local editing of remote files and an emulated current working directory.
 
-You can do almost everything that you could if a standard SSH login were available, and it looks and feels near identical.
+You can do almost everything that you could if a standard SSH login were available, and it looks and feels so familiar that you may not notice the difference.
+
+### Quick start
+
+##### Download and run the main script
+
+```
+curl -so panssh https://raw.githubusercontent.com/LastCallMedia/panssh/refs/heads/lando/panssh
+chmod +x panssh
+./panssh
+```
+Further instructions will then be displayed.
 
 ### Recent changes
-* Tab-completion is now included, on supporting systems:
+* 1.2.1: Added [.lando.panssh.yml](https://github.com/LastCallMedia/panssh/blob/lando/lando/.lando.panssh.yml), which provides [easy setup](https://github.com/LastCallMedia/panssh/blob/lando/lando/README.md) of PanSSH in a [Lando](https://lando.dev/) project.
+* 1.2.0: Tab-completion is now included, on supporting systems:
   * Local site and environment names.
   * Remote directory and file names.
 
@@ -19,11 +32,13 @@ panssh site.env
 ```
 
 ### Non-Interactive
-```
-# From command-line:
-panssh site.env "command1; command2; ..."
 
-# From stdin:
+##### From command-line:
+```
+panssh site.env "command1; command2; ..."
+```
+##### From stdin:
+```
 panssh site.env < script.sh
 echo "commands" | panssh site.env
 ```
@@ -64,10 +79,19 @@ echo "commands" | panssh site.env
 
 ### No installation
 
-* Mark the main `panssh` script as executable: `chmod +x panssh`
-* Run it as just `./panssh` to see further information.
+The only required file is the `panssh` script.
+
+##### Download just the main script
+
+```
+curl -so panssh https://raw.githubusercontent.com/LastCallMedia/panssh/refs/heads/lando/panssh
+```
+* Mark the script as executable: `chmod +x panssh`
+* Run it as just `./panssh` to see further instructions.
 
 ### Minimal installation
+
+Clone the [PanSSH repository](https://github.com/LastCallMedia/panssh) or download and unzip the [zip archive](https://github.com/LastCallMedia/panssh/archive/refs/heads/lando.zip).
 
 Mark the main `panssh` script as executable, then copy or move it to any suitable directory that's included in your PATH.
 
@@ -76,7 +100,7 @@ chmod +x panssh
 sudo mv panssh /usr/local/bin/
 ```
 
-Run it as just `panssh` to see further information.
+Run it as just `panssh` to see further instructions.
 
 ### Optional: tab-completion of local site and environment names
 
@@ -84,7 +108,7 @@ Copy the `panssh` completion script from `bash-completion/` to the `bash-complet
 * For recent Ubuntu distributions, you can probably use `/usr/local/share/bash-completion/completions/`
 * For MacOS, maybe `/opt/homebrew/etc/bash_completion.d/` or `usr/local/etc/bash_completion.d`, depending on your system.
 
-Test tab-completion by entering `panssh ` then pressing the tab key.
+Test tab-completion by entering `panssh ` then pressing the tab key (create a sites configuration file first).
 
 ### Optional: tab-completion of remote directory and file names
 

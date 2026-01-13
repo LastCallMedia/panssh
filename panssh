@@ -11,7 +11,7 @@
 # License: MIT
 ###############################################################################
 
-readonly PANSSH_VERSION="PanSSH 1.2.0"
+readonly PANSSH_VERSION="PanSSH 1.2.1"
 
 # --- Configuration ---
 readonly SSH_PORT="2222"
@@ -24,42 +24,48 @@ mkdir -p -m 700 "$STORAGE_DIR" "$TEMP_DIR"
 readonly LOCAL_HOST=$(hostname -s)
 readonly LOCAL_USER=$(whoami)
 readonly REMOTE_HOME="/tmp/panssh-home.$LOCAL_USER.$LOCAL_HOST"
-readonly REMOTE_ENV="HOME=\"$REMOTE_HOME\" XDG_CACHE_HOME=\"$REMOTE_HOME/.cache\""
+readonly REMOTE_ENV="HOME=\"$REMOTE_HOME\" XDG_CACHE_HOME=\"$REMOTE_HOME/.cache\" WP_CLI_CACHE_DIR=\"$REMOTE_HOME/.cache/wp-cli\""
 
-readonly SSH_SOCKET="$TEMP_DIR/ssh.socket"
-readonly SSH_GENERAL_OPTIONS=" \
+readonly SSH_OPTIONS=" \
+  -o ConnectTimeout=30 \
   -o ControlMaster=auto \
-  -o ControlPath=$SSH_SOCKET \
+  -o ControlPath=$TEMP_DIR/ssh.socket \
   -o ControlPersist=5m \
-  -o StrictHostKeyChecking=no \
-  -o ConnectTimeout=30"
-readonly SSH_OPTIONS="-p $SSH_PORT $SSH_GENERAL_OPTIONS"
-readonly SCP_OPTIONS="-q -P $SSH_PORT $SSH_GENERAL_OPTIONS"
+  -o LogLevel=info \
+  -o Port=$SSH_PORT \
+  -o StrictHostKeyChecking=accept-new \
+  -o UserKnownHostsFile=$STORAGE_DIR/known_hosts"
 
 # Location of this script.
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# --- Load SITE_IDs from config ---
+# Load SITE_IDs from config ---
 if [[ ! -f "$SITES_FILE" ]]; then
-    echo "🟡 Sites file not found at: $SITES_FILE"
-    echo
-    echo "To create it, run:"
-    echo "  terminus site:list --format=csv --fields=name,id > $SITES_FILE"
+    echo -e "\n$PANSSH_VERSION"
+    echo -e "\n🟡 Sites file not found at: $SITES_FILE"
+    echo -e "\nTo create it, run:"
+    [[ "$LANDO" == "ON" ]] && echo -e "  lando ssh"
+    echo -e "  terminus site:list --format=csv --fields=name,id > $SITES_FILE\n"
     exit 1
 fi
 
-# --- Parse command-line, get site.env argument ---
+# Parse command-line, get site.env argument.
 if [[ ! "$1" =~ ^([a-zA-Z0-9\-]+)\.([a-zA-Z0-9\-]+)$ ]]; then
+    [[ "$0" == "./panssh" ]] && panssh="$0" || panssh="panssh"
     echo -e "\n$PANSSH_VERSION"
     echo -e "\nUsage examples:\n"
-    echo -e "  panssh site.env"
-    echo -e "  panssh site.env \"commands\""
-    echo -e "  panssh site.env < script.sh"
-    echo -e "  echo \"commands\" | panssh site.env"
+    echo -e "  $panssh site.env"
+    echo -e "  $panssh site.env \"commands\""
+    echo -e "  $panssh site.env < script.sh"
+    echo -e "  echo \"commands\" | $panssh site.env"
     echo -e "\nSpecial commands:\n"
     echo -e "  View a file: .vw <filepath>"
     echo -e "  Edit a file: .ed <filepath>"
     echo -e "  Toggle automatic directory listing: .ls\n"
+    echo -e "To create or update your available sites configuration, run:"
+    [[ "$LANDO" == "ON" ]] && echo -e "  lando ssh"
+    echo -e "  terminus site:list --format=csv --fields=name,id > $SITES_FILE\n"
+
     exit 1
 fi
 
@@ -79,30 +85,40 @@ readonly HOST="appserver.$ENV_ID.$SITE_ID.drush.in"
 # --- SSH wrapper ---
 ssh_exec() {
     local cmd=$(printf '%q' "$1")
-    ssh $SSH_OPTIONS "$USER@$HOST" "echo $cmd | bash; exit \${PIPESTATUS[1]}"
-    return $?
+    ssh $SSH_OPTIONS "$USER@$HOST" "echo $cmd | bash"
+    # Don't add anything here without saving and returning correct status.
 }
 
-# --- SSH wrapper with current directory tracking ---
+# --- SSH wrapper with syntax check, status and current directory tracking ---
 ssh_exec_track() {
-    local cmd="$1"
-    local marker="___PANSSH_CWD___"
-    local status=0
+    local cwd_marker="PANSSH_status_cwd:"
 
-    while IFS= read -r line; do
-        if [[ "$line" == "$marker "* ]]; then
-            local meta="${line#"$marker "}"
-            status="${meta%%,*}"
-            current_dir="${meta#*,}"
-        else
-            echo "$line"
-        fi
+    # Build command parts.
+    local pre_cmd="$1"
+    local cmd="$2"
+    local clean_cmd="${cmd%;}"
+    local post_cmd="echo \"$cwd_marker\$?|\$(pwd)\""
+
+    # Run the command and print its output until we hit our marker.
+    local line
+    while IFS= read -r line && [[ "$line" != "$cwd_marker"* ]]; do
+        echo "$line"
     done < <(
-        ssh $SSH_OPTIONS "$USER@$HOST" \
-            "echo $(printf '%q' "$cmd; echo $marker \$?,\$(pwd)") | bash"
+        # Run syntax check first, then full command if syntax is valid.
+        ssh_exec "bash -n -c '$cmd' && bash -c '$pre_cmd; $clean_cmd; $post_cmd'"
     )
 
-    return "$status"
+    # Extract status code and working directory from the final line.
+    local status_cwd="${line#"$cwd_marker"}"
+
+    # Check for failure - can happen due to syntax error (status 2), etc.
+    if [[ -z "$status_cwd" ]]; then
+        return 2
+    fi
+
+    # Set remote directory and return status code.
+    REMOTE_CWD="${status_cwd#*|}"
+    return "${status_cwd%%|*}"
 }
 
 # --- Clean up and close SSH connection ---
@@ -110,7 +126,7 @@ cleanup() {
     local status=$?
     history -a
     ssh -O exit $SSH_OPTIONS "$USER@$HOST" 2>/dev/null
-    rm -r "$TEMP_DIR" #> /dev/null 2>&1
+    rm -r "$TEMP_DIR"
     echo -e "\nConnection to $SITE_NAME.$ENV_ID closed." >&2
     exit $status
 }
@@ -124,13 +140,19 @@ if [[ $# -gt 1 ]] || ! [ -t 0 ]; then
     else
         cmd=$(cat)
     fi
-    ssh_exec "export $REMOTE_ENV; $cmd"
+    ssh_exec "$REMOTE_ENV; $cmd"
     exit $?
 fi
 
 # --- File transfer between local and host ---
 transfer_file() {
-    scp $SCP_OPTIONS "$1" "$2"
+    # Standard scp fails under Lando, reason unknown.
+    # Until resolved, we use rsync as a workaround.
+    if [[ $LANDO != "ON" ]]; then
+        scp -q $SSH_OPTIONS "$1" "$2"
+    else
+        rsync -qe "ssh $SSH_OPTIONS" "$1" "$2"
+    fi
     return $?
 }
 
@@ -176,7 +198,7 @@ edit_file() {
         elif [[ "$action" == "ed" ]] && ! ssh_exec "[ -w \"$remote_path\" ]"; then
             echo "🚫 File is not writable."
         else
-            can_edit=1  
+            can_edit=1
             download_needed=1
         fi
     elif [[ "$action" == "ed" ]]; then
@@ -187,7 +209,7 @@ edit_file() {
         elif ! ssh_exec "[ -w \"$dirname\" ]"; then
             echo "🚫 Directory is not writable."
         else
-            can_edit=1  
+            can_edit=1
         fi
     else
         echo "🚫 File not found."
@@ -284,9 +306,10 @@ export HISTCONTROL=ignorespace:ignoredups:erasedups
 history -r
 
 # Set up initial state.
-auto_ls=0
+REMOTE_CWD="/code"
+current_dir="$REMOTE_CWD"
 current_status=0
-current_dir="/code"
+auto_ls=0
 
 # Basic environment checks.
 if ssh_exec "cd $current_dir"; then
@@ -329,7 +352,10 @@ while true; do
     [[ -z "$cmd" ]] && continue
 
     # Handle `exit`.
-    [[ "$cmd" == "exit" ]] && break
+    if [[ "$cmd" =~ ^exit([[:space:]]+(.*))?$ ]]; then
+        current_status="${BASH_REMATCH[2]:-0}"
+        break;
+    fi
 
     # Handle `.ed` (edit) and `.vw` (view)
     if [[ "$cmd" =~ ^\.(ed|vw)[[:space:]]+([^[:space:]]+)(.*)$ ]]; then
@@ -352,15 +378,18 @@ while true; do
         continue
     fi
 
-    # Run the command with our environment and correct directory.
-    current_dir_before="$current_dir"
-    ssh_exec_track "export $REMOTE_ENV; cd \"$current_dir\" && $cmd"
+    # Run the command with our environment, current directory and correct initial value for $?
+    ssh_exec_track "export $REMOTE_ENV; cd \"$current_dir\" && bash -c \"exit $current_status\"" "$cmd"
     current_status=$?
 
-    # Automatic directory listing if enabled and directory was changed.
-    if [[ "$auto_ls" -eq 1 ]] \
-    && [[ "$current_dir" != "$current_dir_before" ]]; then
-        ssh_exec "cd \"$current_dir\" && ls -pC --group-directories-first"
+    # Check whether the command changed the current directory.
+    if [[ -n "$REMOTE_CWD"  &&  "$REMOTE_CWD" != "$current_dir" ]]; then
+        current_dir="$REMOTE_CWD"
+
+        # Automatic directory listing if enabled.
+        if [[ "$auto_ls" -eq 1 ]]; then
+            ssh_exec "cd \"$current_dir\" && ls -pC --group-directories-first"
+        fi
     fi
 
 done
